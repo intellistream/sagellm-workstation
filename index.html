@@ -212,9 +212,6 @@ main{display:flex;flex:1;overflow:hidden}
     </div>
 
     <div class="badges">
-      <select id="backend-select" title="推理后端">
-        <option value="">检测硬件中…</option>
-      </select>
       <span id="status-badge" class="badge badge-status offline">
         <span class="dot" id="status-dot"></span>
         <span id="status-text">连接中</span>
@@ -268,7 +265,7 @@ main{display:flex;flex:1;overflow:hidden}
             </button>
           </div>
         </div>
-        <div id="input-footer"><span id="footer-backend-info" style="opacity:.5">—</span></div>
+        <div id="input-footer"></div>
       </div>
     </div>
 
@@ -431,9 +428,6 @@ async function boot() {
   // Load models
   loadModels();
 
-  // Load hardware backends
-  loadBackends();
-
   // Poll metrics every 3s
   pollMetrics();
   setInterval(pollMetrics, 3000);
@@ -444,55 +438,6 @@ async function boot() {
   });
 }
 
-// ── Backends ─────────────────────────────────────────────────────────────────
-async function loadBackends() {
-  try {
-    const r = await fetch('/api/backends');
-    if (!r.ok) return;
-    const list = await r.json();
-    const sel = document.getElementById('backend-select');
-    sel.innerHTML = '';
-    list.forEach(b => {
-      const opt = document.createElement('option');
-      opt.value = b.id;
-      opt.dataset.label = b.label;
-      opt.dataset.tag   = b.tag;
-      opt.textContent = `${b.label}  [${b.tag}]`;
-      if (b.active) opt.selected = true;
-      if (!b.available) opt.disabled = true;
-      sel.appendChild(opt);
-    });
-    const active = list.find(b => b.active) || list[0];
-    if (active) {
-      const el = document.getElementById('footer-backend-info');
-      if (el) el.textContent = active.label + '  [' + active.tag + ']';
-    }
-    // Wire change event — persists choice and updates footer
-    sel.onchange = () => {
-      const opt = sel.options[sel.selectedIndex];
-      if (opt) switchBackend(sel.value, opt.dataset.label, opt.dataset.tag);
-    };
-  } catch(e) {
-    console.warn('loadBackends failed', e);
-  }
-}
-
-async function switchBackend(id, label, tag) {
-  try {
-    const res = await fetch('/api/backend', {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({id}),
-    });
-    const d = await res.json();
-    if (!d.ok) { showToast('切换失败: ' + (d.error || '未知错误'), 'red'); return; }
-    const el = document.getElementById('footer-backend-info');
-    if (el) el.textContent = label + '  [' + tag + ']';
-    showToast('✓ 已选择 ' + label + '，重启引擎后生效');
-  } catch(e) {
-    showToast('切换失败: ' + e.message, 'red');
-  }
-}
 
 // ── Models ────────────────────────────────────────────────────────────────────
 async function loadModels() {
