@@ -362,11 +362,11 @@ gateway_inference_ready() {
 find_listening_pids_for_port() {
   local port="$1"
   if command -v ss &>/dev/null; then
-    ss -ltnp 2>/dev/null | grep -E ":${port}[[:space:]]" | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u
+    ss -ltnp 2>/dev/null | grep -E ":${port}[[:space:]]" | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u || true
     return 0
   fi
   if command -v lsof &>/dev/null; then
-    lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null | sort -u
+    lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null | sort -u || true
     return 0
   fi
   return 0
@@ -399,7 +399,7 @@ find_sagellm_serve_pids() {
           print $1
         }
       ' \
-    | sort -u
+    | sort -u || true
 }
 
 stop_local_sagellm_serve_processes() {
