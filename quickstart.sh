@@ -161,14 +161,14 @@ update_env_value() {
 }
 
 gateway_host() {
-  local base_url="${SAGELLM_BASE_URL:-http://localhost:8080}"
+  local base_url="${VLLM_HUST_BASE_URL:-http://localhost:8080}"
   local authority="${base_url#*://}"
   authority="${authority%%/*}"
   printf '%s\n' "${authority%%:*}"
 }
 
 gateway_port() {
-  local base_url="${SAGELLM_BASE_URL:-http://localhost:8080}"
+  local base_url="${VLLM_HUST_BASE_URL:-http://localhost:8080}"
   local authority="${base_url#*://}"
   authority="${authority%%/*}"
   if [[ "$authority" == *:* ]]; then
@@ -192,7 +192,7 @@ gateway_probe_url() {
       printf 'http://127.0.0.1:%s\n' "$port"
       ;;
     *)
-      printf '%s\n' "${SAGELLM_BASE_URL:-http://localhost:8080}"
+      printf '%s\n' "${VLLM_HUST_BASE_URL:-http://localhost:8080}"
       ;;
   esac
 }
@@ -232,16 +232,7 @@ build_workspace_pythonpath() {
     vllm-hust-gateway \
     vllm-hust-kv-cache \
     vllm-hust-comm \
-    vllm-hust-compression \
-    sagellm \
-    sagellm-protocol \
-    sagellm-backend \
-    sagellm-core \
-    sagellm-control-plane \
-    sagellm-gateway \
-    sagellm-kv-cache \
-    sagellm-comm \
-    sagellm-compression
+    vllm-hust-compression
   do
     if [[ -d "$parent_dir/$repo/src" ]]; then
       pythonpath="${pythonpath:+$pythonpath:}$parent_dir/$repo/src"
@@ -353,7 +344,7 @@ gateway_inference_ready() {
   code="$(
     curl -sS -o "$body" -w '%{http_code}' --max-time "$timeout_s" \
       -H 'Content-Type: application/json' \
-      -H "Authorization: Bearer ${SAGELLM_API_KEY:-not-required}" \
+      -H "Authorization: Bearer ${VLLM_HUST_API_KEY:-not-required}" \
       -X POST "$(gateway_probe_url)/v1/chat/completions" \
       -d "{\"model\":\"${model_id}\",\"messages\":[{\"role\":\"user\",\"content\":\"${WORKSTATION_HEALTHCHECK_PROMPT}\"}],\"max_tokens\":1,\"stream\":false}" \
       2>/dev/null || true
@@ -399,32 +390,32 @@ stop_local_processes_on_port() {
   fi
 }
 
-find_sagellm_serve_pids() {
+find_vllm_hust_serve_pids() {
   local port="$1"
   local engine_port="$2"
-  pgrep -af 'vllm-hust serve|sagellm serve|vllm_hust\.cli serve|sagellm\.cli serve' 2>/dev/null \
+  pgrep -af 'vllm-hust serve|vllm_hust\.cli serve' 2>/dev/null \
     | awk -v port="$port" -v engine_port="$engine_port" '
-        $0 ~ /(vllm-hust|sagellm|vllm_hust\.cli|sagellm\.cli) serve/ && $0 ~ ("--port " port) && $0 ~ ("--engine-port " engine_port) {
+        $0 ~ /(vllm-hust|vllm_hust\.cli) serve/ && $0 ~ ("--port " port) && $0 ~ ("--engine-port " engine_port) {
           print $1
         }
       ' \
     | sort -u || true
 }
 
-stop_local_sagellm_serve_processes() {
+stop_local_vllm_hust_serve_processes() {
   local port="$1"
   local engine_port="$2"
   local pids
 
-  pids="$(find_sagellm_serve_pids "$port" "$engine_port")"
+  pids="$(find_vllm_hust_serve_pids "$port" "$engine_port")"
   if [[ -z "$pids" ]]; then
     return 0
   fi
 
-  echo -e "${YELLOW}♻️ 检测到残留 vllm-hust/sagellm serve 进程，正在清理…${NC}"
+  echo -e "${YELLOW}♻️ 检测到残留 vllm-hust serve 进程，正在清理…${NC}"
   printf '%s\n' "$pids" | xargs -r kill
   sleep 2
-  pids="$(find_sagellm_serve_pids "$port" "$engine_port")"
+  pids="$(find_vllm_hust_serve_pids "$port" "$engine_port")"
   if [[ -n "$pids" ]]; then
     printf '%s\n' "$pids" | xargs -r kill -9
   fi
@@ -647,7 +638,7 @@ start_full_stack_if_needed() {
   fi
 
   if ! gateway_is_local_target; then
-    echo -e "${YELLOW}✗ 当前 SAGELLM_BASE_URL=${SAGELLM_BASE_URL:-http://localhost:8080} 指向远端地址，脚本不会擅自拉起远端服务${NC}"
+    echo -e "${YELLOW}✗ 当前 VLLM_HUST_BASE_URL=${VLLM_HUST_BASE_URL:-http://localhost:8080} 指向远端地址，脚本不会擅自拉起远端服务${NC}"
     exit 1
   fi
 
@@ -663,58 +654,34 @@ start_full_stack_if_needed() {
   echo -e "   后端: ${GREEN}${backend}${NC}"
   echo -e "   端口: ${GREEN}${port}${NC} (engine: ${engine_port})"
 
-  stop_local_sagellm_serve_processes "$port" "$engine_port"
+  stop_local_vllm_hust_serve_processes "$port" "$engine_port"
   stop_local_processes_on_port "$port"
   stop_local_processes_on_port "$engine_port"
 
   if command -v vllm-hust &>/dev/null; then
     nohup env \
-      SAGELLM_PREFLIGHT_CANARY=0 \
-      SAGELLM_STARTUP_CANARY=0 \
-      SAGELLM_PERIODIC_CANARY=0 \
+      VLLM_HUST_PREFLIGHT_CANARY=0 \
+      VLLM_HUST_STARTUP_CANARY=0 \
+      VLLM_HUST_PERIODIC_CANARY=0 \
       vllm-hust serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port" >"$log_file" 2>&1 &
-  elif command -v sagellm &>/dev/null; then
-    nohup env \
-      SAGELLM_PREFLIGHT_CANARY=0 \
-      SAGELLM_STARTUP_CANARY=0 \
-      SAGELLM_PERIODIC_CANARY=0 \
-      sagellm serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port" >"$log_file" 2>&1 &
   else
     pythonpath="$(build_workspace_pythonpath)"
     if command -v python3 &>/dev/null && [[ -n "$pythonpath" ]]; then
-      if PYTHONPATH="$pythonpath" python3 -c 'import vllm_hust.cli' >/dev/null 2>&1; then
-        nohup env \
-          PYTHONPATH="$pythonpath" \
-          SAGELLM_PREFLIGHT_CANARY=0 \
-          SAGELLM_STARTUP_CANARY=0 \
-          SAGELLM_PERIODIC_CANARY=0 \
-          python3 -m vllm_hust.cli serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port" >"$log_file" 2>&1 &
-      else
-        nohup env \
-          PYTHONPATH="$pythonpath" \
-          SAGELLM_PREFLIGHT_CANARY=0 \
-          SAGELLM_STARTUP_CANARY=0 \
-          SAGELLM_PERIODIC_CANARY=0 \
-          python3 -m sagellm.cli serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port" >"$log_file" 2>&1 &
-      fi
+      nohup env \
+        PYTHONPATH="$pythonpath" \
+        VLLM_HUST_PREFLIGHT_CANARY=0 \
+        VLLM_HUST_STARTUP_CANARY=0 \
+        VLLM_HUST_PERIODIC_CANARY=0 \
+        python3 -m vllm_hust.cli serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port" >"$log_file" 2>&1 &
     elif command -v python &>/dev/null && [[ -n "$pythonpath" ]]; then
-      if PYTHONPATH="$pythonpath" python -c 'import vllm_hust.cli' >/dev/null 2>&1; then
-        nohup env \
-          PYTHONPATH="$pythonpath" \
-          SAGELLM_PREFLIGHT_CANARY=0 \
-          SAGELLM_STARTUP_CANARY=0 \
-          SAGELLM_PERIODIC_CANARY=0 \
-          python -m vllm_hust.cli serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port" >"$log_file" 2>&1 &
-      else
-        nohup env \
-          PYTHONPATH="$pythonpath" \
-          SAGELLM_PREFLIGHT_CANARY=0 \
-          SAGELLM_STARTUP_CANARY=0 \
-          SAGELLM_PERIODIC_CANARY=0 \
-          python -m sagellm.cli serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port" >"$log_file" 2>&1 &
-      fi
+      nohup env \
+        PYTHONPATH="$pythonpath" \
+        VLLM_HUST_PREFLIGHT_CANARY=0 \
+        VLLM_HUST_STARTUP_CANARY=0 \
+        VLLM_HUST_PERIODIC_CANARY=0 \
+        python -m vllm_hust.cli serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port" >"$log_file" 2>&1 &
     else
-      echo -e "${YELLOW}✗ 无法自动启动完整栈：未找到 vllm-hust/sagellm CLI，也没有可用 Python + workspace 源码入口${NC}"
+      echo -e "${YELLOW}✗ 无法自动启动完整栈：未找到 vllm-hust CLI，也没有可用 Python + workspace 源码入口${NC}"
       exit 1
     fi
   fi

@@ -114,7 +114,7 @@ export default function WorkstationClient({ config }: { config: AppConfig }) {
       return;
     }
     try {
-      setWebSearch(window.localStorage.getItem("sagellm_web_search") === "1");
+      setWebSearch(window.localStorage.getItem("vllm_hust_web_search") === "1");
     } catch {
       // ignore localStorage errors
     }
@@ -180,7 +180,7 @@ export default function WorkstationClient({ config }: { config: AppConfig }) {
     setWebSearch((prev) => {
       const next = !prev;
       try {
-        window.localStorage.setItem("sagellm_web_search", next ? "1" : "0");
+        window.localStorage.setItem("vllm_hust_web_search", next ? "1" : "0");
       } catch {
         // ignore localStorage errors
       }
@@ -344,7 +344,7 @@ export default function WorkstationClient({ config }: { config: AppConfig }) {
           failed = true;
           const errMsg = (err as Error)?.message?.trim()
             ? `抱歉，推理服务暂时无法响应。\n${(err as Error).message.trim()}`
-            : "抱歉，推理服务暂时无法响应。\n请确认 sagellm-gateway 已正常启动。";
+            : "抱歉，推理服务暂时无法响应。\n请确认 vllm-hust-gateway 已正常启动。";
           setProcessSteps(
             createSteps({
               webSearch,

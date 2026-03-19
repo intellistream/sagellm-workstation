@@ -4,7 +4,7 @@
 
 GW_PORT=8091
 MODEL=Mistral-Small-24B-Instruct-2501
-LOGFILE=/tmp/sagellm_watchdog.log
+LOGFILE=/tmp/vllm-hust_watchdog.log
 ENGINE_PORTS=(8902 8903 8904 8901)
 
 log() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOGFILE"; }
@@ -29,13 +29,13 @@ find_healthy_engine() {
 restart_gateway() {
   local engine_port=$1
   log "重启 gateway → engine:${engine_port}"
-  pkill -f "sagellm-gateway.*${GW_PORT}" 2>/dev/null
+  pkill -f "vllm-hust-gateway.*${GW_PORT}" 2>/dev/null
   sleep 2
-  SAGELLM_ENGINE_HOST=localhost \
-  SAGELLM_ENGINE_PORT=$engine_port \
-  SAGELLM_ENGINE_MODEL=$MODEL \
-  SAGELLM_ENGINE_ID=workstation-engine \
-    sagellm-gateway --port $GW_PORT --log-level warning >> /tmp/sagellm_gateway.log 2>&1 &
+  VLLM_HUST_ENGINE_HOST=localhost \
+  VLLM_HUST_ENGINE_PORT=$engine_port \
+  VLLM_HUST_ENGINE_MODEL=$MODEL \
+  VLLM_HUST_ENGINE_ID=workstation-engine \
+    vllm-hust-gateway --port $GW_PORT --log-level warning >> /tmp/vllm-hust_gateway.log 2>&1 &
   sleep 4
   if gateway_healthy; then
     log "Gateway 恢复正常 ✓ (engine:${engine_port})"

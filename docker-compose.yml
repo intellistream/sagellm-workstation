@@ -4,9 +4,9 @@ services:
     ports:
       - "${APP_PORT:-3000}:3000"
     environment:
-      # sagellm-gateway endpoint (OpenAI-compatible)
-      SAGELLM_BASE_URL: ${SAGELLM_BASE_URL:-http://host.docker.internal:8080}
-      SAGELLM_API_KEY: ${SAGELLM_API_KEY:-not-required}
+      # vllm-hust-gateway endpoint (OpenAI-compatible)
+      VLLM_HUST_BASE_URL: ${VLLM_HUST_BASE_URL:-http://host.docker.internal:8080}
+      VLLM_HUST_API_KEY: ${VLLM_HUST_API_KEY:-not-required}
       DEFAULT_MODEL: ${DEFAULT_MODEL:-default}
       BACKEND_TYPE: ${BACKEND_TYPE:-Ascend NPU}
       # White-label branding

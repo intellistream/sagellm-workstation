@@ -755,7 +755,7 @@ function updateSysPromptBar() {
 }
 
 // ── Sessions ───────────────────────────────────────────────────────────────
-const SESS_KEY = 'sagellm_sessions';
+const SESS_KEY = 'vllm_hust_sessions';
 const SESS_MAX = 20;
 
 function loadSessions() {
@@ -1045,7 +1045,7 @@ async function streamAssistant(userText) {
     showTyping(false);
     _procUpdateLast(procCard, '❌', '连接失败，请确认推理引擎已启动', false);
     _procDone(procCard, '失败');
-    content = '推理引擎未响应，请确认 sagellm-gateway 已启动，然后刷新页面重试。';
+    content = '推理引擎未响应，请确认 vllm-hust-gateway 已启动，然后刷新页面重试。';
     const el = createMessageEl('assistant', content, id);
     msgsEl.appendChild(el);
   } finally {
@@ -1214,7 +1214,7 @@ function exportChat() {
   });
   const blob = new Blob([md],{type:'text/markdown;charset=utf-8'});
   const url  = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href=url; a.download=`sagellm-chat-${Date.now()}.md`; a.click();
+  const a = document.createElement('a'); a.href=url; a.download=`vllm-hust-chat-${Date.now()}.md`; a.click();
   URL.revokeObjectURL(url);
   showToast('对话已导出为 Markdown');
 }
@@ -1334,7 +1334,7 @@ async function loadHub() {
     const [cr, cfgr] = await Promise.all([fetch('/api/hub/catalog'), fetch('/config.json')]);
     hubCatalog = await cr.json();
     const cfg2 = await cfgr.json();
-    setText('hub-models-dir', cfg2.modelsDir || '~/Downloads/sagellm-models');
+    setText('hub-models-dir', cfg2.modelsDir || '~/Downloads/vllm-hust-models');
     setText('hub-mirror-label', cfg2.hfEndpoint || 'huggingface.co');
   } catch { hubCatalog=[]; }
   renderHubGrid();

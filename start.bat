@@ -25,7 +25,7 @@ IF %ERRORLEVEL% NEQ 0 (
 
 IF NOT EXIST .env (
     copy .env.example .env >nul
-    echo  [提示] 已生成 .env，请按需修改 SAGELLM_BASE_URL 等配置
+    echo  [提示] 已生成 .env，请按需修改 VLLM_HUST_BASE_URL 等配置
 )
 
 echo  [1/2] 安装 Node 依赖...

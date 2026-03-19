@@ -16,13 +16,13 @@ type Store = {
   downloads: Record<string, RuntimeDownload>;
 };
 
-const globalStore = globalThis as typeof globalThis & { __sagellmModelHubStore?: Store };
+const globalStore = globalThis as typeof globalThis & { __vllmHustModelHubStore?: Store };
 
 function getStore(): Store {
-  if (!globalStore.__sagellmModelHubStore) {
-    globalStore.__sagellmModelHubStore = { downloads: {} };
+  if (!globalStore.__vllmHustModelHubStore) {
+    globalStore.__vllmHustModelHubStore = { downloads: {} };
   }
-  return globalStore.__sagellmModelHubStore;
+  return globalStore.__vllmHustModelHubStore;
 }
 
 async function walkDir(dirPath: string): Promise<string[]> {

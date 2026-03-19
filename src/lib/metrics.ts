@@ -31,58 +31,58 @@ type MetricsStore = {
 };
 
 const globalMetrics = globalThis as typeof globalThis & {
-  __sagellmWorkstationMetrics?: MetricsStore;
+  __vllmHustWorkstationMetrics?: MetricsStore;
 };
 
 function createMetricsStore(): MetricsStore {
   const registry = new Registry();
   collectDefaultMetrics({
     register: registry,
-    prefix: "sagellm_workstation_nodejs_",
+    prefix: "vllm_hust_workstation_nodejs_",
   });
 
   return {
     registry,
     apiRequestsTotal: new Counter({
-      name: "sagellm_workstation_api_requests_total",
+      name: "vllm_hust_workstation_api_requests_total",
       help: "Total number of workstation API requests handled.",
       labelNames: ["route", "method", "status"],
       registers: [registry],
     }),
     apiRequestDurationSeconds: new Histogram({
-      name: "sagellm_workstation_api_request_duration_seconds",
+      name: "vllm_hust_workstation_api_request_duration_seconds",
       help: "End-to-end request duration for workstation API routes.",
       labelNames: ["route", "method"],
       buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
       registers: [registry],
     }),
     upstreamRequestDurationSeconds: new Histogram({
-      name: "sagellm_workstation_upstream_request_duration_seconds",
-      help: "Latency of upstream sagellm-gateway requests issued by workstation.",
+      name: "vllm_hust_workstation_upstream_request_duration_seconds",
+      help: "Latency of upstream vllm-hust-gateway requests issued by workstation.",
       labelNames: ["route", "upstream", "status_class"],
       buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
       registers: [registry],
     }),
     activeChatRequests: new Gauge({
-      name: "sagellm_workstation_active_chat_requests",
+      name: "vllm_hust_workstation_active_chat_requests",
       help: "Current number of in-flight chat streaming requests.",
       registers: [registry],
     }),
     chatStreamDurationSeconds: new Histogram({
-      name: "sagellm_workstation_chat_stream_duration_seconds",
+      name: "vllm_hust_workstation_chat_stream_duration_seconds",
       help: "Streaming duration for successful chat requests.",
       labelNames: ["model"],
       buckets: [0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60],
       registers: [registry],
     }),
     chatApproxTokensTotal: new Counter({
-      name: "sagellm_workstation_chat_approx_tokens_total",
+      name: "vllm_hust_workstation_chat_approx_tokens_total",
       help: "Approximate number of generated tokens emitted by workstation chat streams.",
       labelNames: ["model"],
       registers: [registry],
     }),
     workstationInfo: new Gauge({
-      name: "sagellm_workstation_info",
+      name: "vllm_hust_workstation_info",
       help: "Static workstation metadata with model and backend labels.",
       labelNames: ["model", "backend"],
       registers: [registry],
@@ -103,10 +103,10 @@ function createMetricsStore(): MetricsStore {
 }
 
 function getMetricsStore(): MetricsStore {
-  if (!globalMetrics.__sagellmWorkstationMetrics) {
-    globalMetrics.__sagellmWorkstationMetrics = createMetricsStore();
+  if (!globalMetrics.__vllmHustWorkstationMetrics) {
+    globalMetrics.__vllmHustWorkstationMetrics = createMetricsStore();
   }
-  return globalMetrics.__sagellmWorkstationMetrics;
+  return globalMetrics.__vllmHustWorkstationMetrics;
 }
 
 export function setWorkstationInfo(modelName: string, backendType: string): void {

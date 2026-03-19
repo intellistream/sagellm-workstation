@@ -39,16 +39,8 @@ if config_path.exists():
     config.read(config_path, encoding="utf-8")
 
 def cfg(section: str, key: str, fallback: str = "") -> str:
-    # Prefer new vllm_hust section while keeping sagellm backward compatibility.
-    aliases = [section]
-    if section == "vllm_hust":
-        aliases.append("sagellm")
-    elif section == "sagellm":
-        aliases.insert(0, "vllm_hust")
-
-    for current in aliases:
-        if config.has_option(current, key):
-            return config.get(current, key, fallback=fallback).strip()
+    if config.has_option(section, key):
+        return config.get(section, key, fallback=fallback).strip()
     return fallback.strip()
 
 PORT         = int(cfg("server", "port", "3000"))

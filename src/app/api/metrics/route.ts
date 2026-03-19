@@ -38,24 +38,24 @@ async function fetchLiveMetrics(): Promise<Partial<MetricsSnapshot>> {
     };
 
     return compactMetrics({
-      tokensPerSecond: parse("sagellm_tokens_per_second"),
-      pendingRequests: parse("sagellm_pending_requests"),
-      gpuUtilPct: parse("sagellm_gpu_util_pct"),
-      gpuMemUsedGb: parse("sagellm_gpu_mem_used_bytes") !== undefined
-        ? (parse("sagellm_gpu_mem_used_bytes")! / 1e9)
+      tokensPerSecond: parse("vllm_hust_tokens_per_second"),
+      pendingRequests: parse("vllm_hust_pending_requests"),
+      gpuUtilPct: parse("vllm_hust_gpu_util_pct"),
+      gpuMemUsedGb: parse("vllm_hust_gpu_mem_used_bytes") !== undefined
+        ? (parse("vllm_hust_gpu_mem_used_bytes")! / 1e9)
         : undefined,
-      gpuMemTotalGb: parse("sagellm_gpu_mem_total_bytes") !== undefined
-        ? (parse("sagellm_gpu_mem_total_bytes")! / 1e9)
+      gpuMemTotalGb: parse("vllm_hust_gpu_mem_total_bytes") !== undefined
+        ? (parse("vllm_hust_gpu_mem_total_bytes")! / 1e9)
         : undefined,
-      totalRequestsServed: parse("sagellm_requests_total"),
-      avgLatencyMs: parse("sagellm_latency_p50_ms"),
+      totalRequestsServed: parse("vllm_hust_requests_total"),
+      avgLatencyMs: parse("vllm_hust_latency_p50_ms"),
     });
   } catch {
     return {};
   }
 }
 
-// Also try OpenAI-compatible /v1/stats (sagellm extension)
+// Also try OpenAI-compatible /v1/stats (vllm-hust extension)
 async function fetchV1Stats(): Promise<Partial<MetricsSnapshot>> {
   try {
     const start = performance.now();

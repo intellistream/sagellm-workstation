@@ -27,7 +27,7 @@
 
 - Node.js 20+
 - 本机已安装 `ivllm-hust`，或当前 shell 已激活可运行 `vllm-hust` 的 Python 环境
-- 本地 quickstart 默认会尝试自启动“完整栈（gateway + engine）”，无需再手动补 `SAGELLM_CP_ENGINE_*`
+- 本地 quickstart 默认会尝试自启动“完整栈（gateway + engine）”，无需再手动补 `VLLM_HUST_CP_ENGINE_*`
 
 ### Linux / macOS
 
@@ -37,10 +37,10 @@
 
 默认行为：
 
-- 若 `SAGELLM_BASE_URL` 指向本机地址（如 `localhost:8080`），脚本会先检查本地服务是否真的可推理；若不可推理，则自动拉起 `vllm-hust serve` 完整栈（兼容回退到 `sagellm serve`）
+- 若 `VLLM_HUST_BASE_URL` 指向本机地址（如 `localhost:8080`），脚本会先检查本地服务是否真的可推理；若不可推理，则自动拉起 `vllm-hust serve` 完整栈
 - 若在本地终端执行 `./quickstart.sh`，启动前会出现交互式模型菜单；脚本会优先按实际硬件自动识别后端（如 `nvidia-smi -> cuda`），并在 CUDA 场景下按 8GB / 12GB / 16GB / 24GB+ 显存档位给推荐模型，选择结果会同步写回 `.env` 的 `WORKSTATION_BOOTSTRAP_MODEL` / `DEFAULT_MODEL`
 - 若本地已有 gateway 但未注册健康 engine，脚本可自动重建本地服务，避免“UI 已启动但 chat 一直报 No healthy LLM engine”
-- 若 `SAGELLM_BASE_URL` 指向远端地址，脚本会 fail-fast，而不是假装启动成功
+- 若 `VLLM_HUST_BASE_URL` 指向远端地址，脚本会 fail-fast，而不是假装启动成功
 - 本地完整栈日志默认写入 `.logs/vllm-hust-serve.log`
 
 ### Windows
@@ -64,8 +64,8 @@ npm run dev
 复制 `.env.example` 为 `.env` 后编辑：
 
 ```dotenv
-SAGELLM_BASE_URL=http://localhost:8080
-SAGELLM_API_KEY=not-required
+VLLM_HUST_BASE_URL=http://localhost:8080
+VLLM_HUST_API_KEY=not-required
 WORKSTATION_AUTO_START_GATEWAY=true
 WORKSTATION_AUTO_HEAL_GATEWAY=true
 WORKSTATION_BOOTSTRAP_MODEL=sshleifer/tiny-gpt2
@@ -122,12 +122,12 @@ WORKSTATION_AUTO_DETECT_BACKEND=false
 
 内置指标包括：
 
-- `sagellm_workstation_api_requests_total`
-- `sagellm_workstation_api_request_duration_seconds`
-- `sagellm_workstation_upstream_request_duration_seconds`
-- `sagellm_workstation_active_chat_requests`
-- `sagellm_workstation_chat_stream_duration_seconds`
-- `sagellm_workstation_chat_approx_tokens_total`
+- `vllm_hust_workstation_api_requests_total`
+- `vllm_hust_workstation_api_request_duration_seconds`
+- `vllm_hust_workstation_upstream_request_duration_seconds`
+- `vllm_hust_workstation_active_chat_requests`
+- `vllm_hust_workstation_chat_stream_duration_seconds`
+- `vllm_hust_workstation_chat_approx_tokens_total`
 
 ---
 
