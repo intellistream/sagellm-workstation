@@ -80,7 +80,7 @@ export default function Header({
           className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-cyan-300/25 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300/20 transition-colors text-sm"
         >
           <Bot size={14} />
-          Agent Lab
+          EvoScientist
         </button>
         <button
           type="button"
