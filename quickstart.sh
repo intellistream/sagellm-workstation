@@ -499,6 +499,7 @@ build_workspace_pythonpath() {
   local parent_dir
   local repo
   local pythonpath=""
+  local candidate
   parent_dir="$(cd "$SCRIPT_DIR/.." && pwd)"
   for repo in \
     vllm-hust \
@@ -511,11 +512,67 @@ build_workspace_pythonpath() {
     vllm-hust-comm \
     vllm-hust-compression
   do
-    if [[ -d "$parent_dir/$repo/src" ]]; then
-      pythonpath="${pythonpath:+$pythonpath:}$parent_dir/$repo/src"
-    fi
+    for candidate in "$parent_dir/$repo" "$parent_dir/$repo/src"; do
+      if [[ -d "$candidate" ]]; then
+        case "$candidate" in
+          */src)
+            pythonpath="${pythonpath:+$pythonpath:}$candidate"
+            ;;
+          *)
+            if [[ -d "$candidate/vllm" || -d "$candidate/vllm_hust" ]]; then
+              pythonpath="${pythonpath:+$pythonpath:}$candidate"
+            fi
+            ;;
+        esac
+      fi
+    done
   done
   printf '%s\n' "$pythonpath"
+}
+
+active_python_command() {
+  if command -v python3 &>/dev/null; then
+    command -v python3
+    return 0
+  fi
+  if command -v python &>/dev/null; then
+    command -v python
+    return 0
+  fi
+  return 1
+}
+
+python_runtime_supports_vllm() {
+  local python_bin="$1"
+  local pythonpath="${2:-}"
+
+  if [[ -n "$pythonpath" ]]; then
+    PYTHONNOUSERSITE=1 PYTHONPATH="$pythonpath" "$python_bin" -c 'import torch, transformers, huggingface_hub; import vllm.entrypoints.cli.main' >/dev/null 2>&1
+    return $?
+  fi
+
+  PYTHONNOUSERSITE=1 "$python_bin" -c 'import torch, transformers, huggingface_hub; import vllm.entrypoints.cli.main' >/dev/null 2>&1
+}
+
+print_backend_runtime_preflight_error() {
+  local python_bin="${1:-}"
+  local pythonpath="${2:-}"
+  local details=""
+
+  if [[ -n "$python_bin" ]]; then
+    if [[ -n "$pythonpath" ]]; then
+      details="$(PYTHONNOUSERSITE=1 PYTHONPATH="$pythonpath" "$python_bin" -c 'import torch, transformers, huggingface_hub; import vllm.entrypoints.cli.main' 2>&1 || true)"
+    else
+      details="$(PYTHONNOUSERSITE=1 "$python_bin" -c 'import torch, transformers, huggingface_hub; import vllm.entrypoints.cli.main' 2>&1 || true)"
+    fi
+  fi
+
+  echo -e "${YELLOW}✗ 当前 Python / vllm-hust 运行时不完整，quickstart 只会自动补齐 Node.js，不会自动安装后端 Python 依赖${NC}"
+  if [[ -n "$details" ]]; then
+    echo -e "${YELLOW}  失败原因：${NC}"
+    printf '%s\n' "$details" | sed 's/^/   /'
+  fi
+  echo -e "${YELLOW}  请先在当前 conda 环境中补齐 torch、transformers、huggingface_hub 等依赖，再重试。${NC}"
 }
 
 bootstrap_model() {
@@ -1296,7 +1353,11 @@ start_full_stack_if_needed() {
   ensure_local_port_available "$port" "工作站本地 gateway" "VLLM_HUST_BASE_URL=http://localhost:<new-port>"
   ensure_local_port_available "$engine_port" "工作站本地 engine" "WORKSTATION_ENGINE_PORT=<new-port>"
 
-  if command -v vllm-hust &>/dev/null; then
+  pythonpath="$(build_workspace_pythonpath)"
+  local python_bin=""
+  python_bin="$(active_python_command || true)"
+
+  if command -v vllm-hust &>/dev/null && PYTHONNOUSERSITE=1 vllm-hust serve --help >/dev/null 2>&1; then
     local serve_help
     local -a serve_args
     serve_help="$(vllm-hust serve --help 2>&1 || true)"
@@ -1375,35 +1436,76 @@ start_full_stack_if_needed() {
       -- \
       vllm-hust "${serve_args[@]}"
   else
-    pythonpath="$(build_workspace_pythonpath)"
-    if command -v python3 &>/dev/null && [[ -n "$pythonpath" ]]; then
-      launch_local_workstation_backend \
-        "$log_file" \
-        "$treat_as_ascend_runtime" \
-        "$compile_custom_kernels" \
-        "${offline_env[@]}" \
-        "${backend_env[@]}" \
-        PYTHONPATH="$pythonpath" \
-        VLLM_HUST_PREFLIGHT_CANARY=0 \
-        VLLM_HUST_STARTUP_CANARY=0 \
-        VLLM_HUST_PERIODIC_CANARY=0 \
-        -- \
-        python3 -m vllm_hust.cli serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port"
-    elif command -v python &>/dev/null && [[ -n "$pythonpath" ]]; then
-      launch_local_workstation_backend \
-        "$log_file" \
-        "$treat_as_ascend_runtime" \
-        "$compile_custom_kernels" \
-        "${offline_env[@]}" \
-        "${backend_env[@]}" \
-        PYTHONPATH="$pythonpath" \
-        VLLM_HUST_PREFLIGHT_CANARY=0 \
-        VLLM_HUST_STARTUP_CANARY=0 \
-        VLLM_HUST_PERIODIC_CANARY=0 \
-        -- \
-        python -m vllm_hust.cli serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port"
+    local serve_help=""
+    local -a serve_args
+    serve_args=(serve)
+
+    if command -v vllm-hust &>/dev/null; then
+      serve_help="$(PYTHONNOUSERSITE=1 vllm-hust serve --help 2>&1 || true)"
+    elif [[ -n "$python_bin" ]] && [[ -n "$pythonpath" ]] && python_runtime_supports_vllm "$python_bin" "$pythonpath"; then
+      serve_help="$(PYTHONNOUSERSITE=1 PYTHONPATH="$pythonpath" "$python_bin" -m vllm.entrypoints.cli.main serve --help 2>&1 || true)"
+    fi
+
+    if [[ -z "$serve_help" ]]; then
+      print_backend_runtime_preflight_error "$python_bin" "$pythonpath"
+      exit 1
+    fi
+
+    if [[ "$serve_help" == *"--backend"* ]]; then
+      serve_args+=(--backend "$backend")
+    fi
+
+    if [[ "$serve_help" == *"--model"* ]]; then
+      serve_args+=(--model "$model")
     else
-      echo -e "${YELLOW}✗ 无法自动启动完整栈：未找到 vllm-hust CLI，也没有可用 Python + workspace 源码入口${NC}"
+      serve_args+=("$model")
+    fi
+
+    serve_args+=(--host 0.0.0.0 --port "$port")
+
+    if [[ -n "$target_device" && "$serve_help" == *"--device"* ]]; then
+      serve_args+=(--device "$target_device")
+    fi
+
+    if [[ -n "$gpu_memory_utilization" && "$serve_help" == *"--gpu-memory-utilization"* ]]; then
+      serve_args+=(--gpu-memory-utilization "$gpu_memory_utilization")
+    fi
+
+    if [[ "$serve_help" == *"--engine-port"* ]]; then
+      serve_args+=(--engine-port "$engine_port")
+    fi
+
+    if [[ "$disable_prefix_caching" == "true" && "$serve_help" == *"--enable-prefix-caching"* ]]; then
+      serve_args+=(--no-enable-prefix-caching)
+    fi
+
+    if [[ "$disable_chunked_prefill" == "true" && "$serve_help" == *"--enable-chunked-prefill"* ]]; then
+      serve_args+=(--no-enable-chunked-prefill)
+    fi
+
+    if [[ "$enable_auto_tool_choice" == "true" ]]; then
+      serve_args+=(--enable-auto-tool-choice)
+    fi
+    if [[ -n "$tool_call_parser" ]]; then
+      serve_args+=(--tool-call-parser "$tool_call_parser")
+    fi
+
+    if [[ -n "$python_bin" ]] && [[ -n "$pythonpath" ]] && python_runtime_supports_vllm "$python_bin" "$pythonpath"; then
+      launch_local_workstation_backend \
+        "$log_file" \
+        "$treat_as_ascend_runtime" \
+        "$compile_custom_kernels" \
+        "${offline_env[@]}" \
+        "${backend_env[@]}" \
+        PYTHONNOUSERSITE=1 \
+        PYTHONPATH="$pythonpath" \
+        VLLM_HUST_PREFLIGHT_CANARY=0 \
+        VLLM_HUST_STARTUP_CANARY=0 \
+        VLLM_HUST_PERIODIC_CANARY=0 \
+        -- \
+        "$python_bin" -m vllm.entrypoints.cli.main "${serve_args[@]}"
+    else
+      print_backend_runtime_preflight_error "$python_bin" "$pythonpath"
       exit 1
     fi
   fi
