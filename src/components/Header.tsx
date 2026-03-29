@@ -8,6 +8,7 @@ interface HeaderProps {
   accentColor: string;
   model: string;
   models: string[];
+  liveModelSwitchSupported: boolean;
   onModelChange: (m: string) => void;
   onOpenModelHub: () => void;
   onOpenAgentLab: () => void;
@@ -20,6 +21,7 @@ export default function Header({
   accentColor,
   model,
   models,
+  liveModelSwitchSupported,
   onModelChange,
   onOpenModelHub,
   onOpenAgentLab,
@@ -94,7 +96,9 @@ export default function Header({
           <select
             value={model}
             onChange={(e) => onModelChange(e.target.value)}
-            className="appearance-none bg-white/5 border border-white/10 text-white text-sm px-4 py-2 pr-8 rounded-lg cursor-pointer focus:outline-none focus:border-white/30 hover:bg-white/10 transition-colors max-w-[220px]"
+            disabled={!liveModelSwitchSupported}
+            title={liveModelSwitchSupported ? "在线切换当前请求使用的模型" : "当前后端是单模型服务，切换模型需重启后端"}
+            className="appearance-none bg-white/5 border border-white/10 text-white text-sm px-4 py-2 pr-8 rounded-lg cursor-pointer focus:outline-none focus:border-white/30 hover:bg-white/10 transition-colors max-w-[220px] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {models.map((m) => (
               <option key={m} value={m} className="bg-slate-800">

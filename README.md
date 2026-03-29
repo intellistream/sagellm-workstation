@@ -21,7 +21,14 @@
 
 ### 启动脚本说明
 
-- `./quickstart.sh`：统一入口；支持 `auto` / `docker` / `dev`
+- `./quickstart.sh`：统一入口；本地终端默认进入交互式演示菜单
+- `./quickstart.sh demo`：后台一键拉起“本地后端 + 工作站 UI”
+- `./quickstart.sh backend`：仅启动 / 修复本地 `vllm-hust`
+- `./quickstart.sh restart-backend`：强制重启本地 `vllm-hust`
+- `./quickstart.sh ui`：仅后台启动工作站前端
+- `./quickstart.sh status`：查看本地演示栈状态
+- `./quickstart.sh stop`：停止本地演示栈
+- `./quickstart.sh auto|docker|dev`：保留原有模式入口
 - `start.bat`：Windows 下的本地 `dev` 快捷入口
 
 ### 前提
@@ -38,11 +45,19 @@
 
 默认行为：
 
+- 若当前 shell 连接的是本地终端，脚本会先进入交互式“演示启动菜单”，默认第一项就是“一键启动全部”
 - 若 `VLLM_HUST_BASE_URL` 指向本机地址（如 `localhost:8080`），脚本会先检查本地服务是否真的可推理；若不可推理，则自动拉起 `vllm-hust serve` 完整栈
+- 若本地已有健康可推理服务，即使 `.env` 中写的是另一套模型，默认也会优先复用当前服务；只有显式执行 `restart-backend`、开启交互式模型菜单确认切换，或设置 `WORKSTATION_ENFORCE_BOOTSTRAP_MODEL_ON_START=true` 时，才会按 `.env` 模型重建
+- 若本地目标端口（默认 `8080` / `3000`）已被其他进程占用且当前用户无法安全接管，脚本会 fail-fast 并提示应释放端口，或改用新的 `VLLM_HUST_BASE_URL` / `APP_PORT`
+- Ascend 场景下，`quickstart.sh` 会优先复用 `hust-ascend-manager` 环境，并默认以 `COMPILE_CUSTOM_KERNELS=0` 启动本地后端，避免在工作站启动前触发 custom kernels 编译
+- 若本机没有 `node/npm`，且当前 shell 已激活 conda，`quickstart.sh` 默认会尝试把 Node.js 20 自动安装到当前 conda 环境，再继续走 `dev` 模式启动
+- 若未显式配置 `HF_ENDPOINT`，workstation 会默认走 `https://hf-mirror.com`；若镜像也不可达且当前所选模型未缓存，才会回退到本机已有缓存模型继续启动
+- 若前端 `.next` 构建缓存来自其他机器路径或当前前端已返回 500，`quickstart.sh` 会自动清理旧缓存并重启前端
 - 若在本地终端执行 `./quickstart.sh`，启动前会出现交互式模型菜单；脚本会优先按实际硬件自动识别后端（如 `nvidia-smi -> cuda`），并在 CUDA 场景下按 8GB / 12GB / 16GB / 24GB+ 显存档位给推荐模型，选择结果会同步写回 `.env` 的 `WORKSTATION_BOOTSTRAP_MODEL` / `DEFAULT_MODEL`
 - 若本地已有 gateway 但未注册健康 engine，脚本可自动重建本地服务，避免“UI 已启动但 chat 一直报 No healthy LLM engine”
 - 若 `VLLM_HUST_BASE_URL` 指向远端地址，脚本会 fail-fast，而不是假装启动成功
 - 本地完整栈日志默认写入 `.logs/vllm-hust-serve.log`
+- 工作站监控栏新增“演示控制台”，可直接在 UI 内执行“一键拉起 / 修复后端”“重启本地后端”“停止本地演示栈”
 
 ### Windows
 
@@ -65,18 +80,29 @@ npm run dev
 复制 `.env.example` 为 `.env` 后编辑：
 
 ```dotenv
+# 若本机 8080 已被占用，可改成例如 http://localhost:18080
 VLLM_HUST_BASE_URL=http://localhost:8080
 VLLM_HUST_API_KEY=not-required
 WORKSTATION_AUTO_START_GATEWAY=true
 WORKSTATION_AUTO_HEAL_GATEWAY=true
+WORKSTATION_ENFORCE_BOOTSTRAP_MODEL_ON_START=false
 WORKSTATION_BOOTSTRAP_MODEL=Qwen/Qwen2.5-7B-Instruct
+WORKSTATION_INTERACTIVE_LAUNCHER=true
 WORKSTATION_INTERACTIVE_MODEL_MENU=true
 WORKSTATION_BOOTSTRAP_BACKEND=auto
 WORKSTATION_AUTO_DETECT_BACKEND=true
+WORKSTATION_ASCEND_COMPILE_CUSTOM_KERNELS=0
+WORKSTATION_AUTO_INSTALL_NODE_WITH_CONDA=true
+WORKSTATION_NODEJS_CONDA_SPEC=nodejs>=20,<21
+WORKSTATION_AUTO_FALLBACK_TO_LOCAL_CACHE=true
+# 默认是 gateway port + 1；若冲突可改成其他空闲端口
 WORKSTATION_ENGINE_PORT=8902
 DEFAULT_MODEL=Qwen2.5-7B-Instruct
 BACKEND_TYPE=AUTO
 
+HF_ENDPOINT=https://hf-mirror.com
+
+# 若 3000 已被占用，可改成例如 3300
 APP_PORT=3000
 APP_BRAND_NAME=vLLM-HUST 工作站
 APP_BRAND_LOGO=
@@ -86,6 +112,7 @@ APP_ACCENT_COLOR=#6366f1
 如不希望每次启动都弹出模型选择菜单，可在 `.env` 中设置：
 
 ```dotenv
+WORKSTATION_INTERACTIVE_LAUNCHER=false
 WORKSTATION_INTERACTIVE_MODEL_MENU=false
 ```
 

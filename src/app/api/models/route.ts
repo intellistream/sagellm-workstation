@@ -29,12 +29,15 @@ export async function GET() {
 
   const fallbackModelId = process.env.DEFAULT_MODEL || DEFAULT_MODEL_ID;
   const usableIds = engineProbe.state === "healthy" ? engineProbe.modelIds : modelsProbe.ids;
+  const availableIds = usableIds.length > 0 ? usableIds : [fallbackModelId];
+  const liveModelSwitchSupported = usableIds.length > 1;
 
   recordApiRequest("/api/models", "GET", 200, (performance.now() - start) / 1000);
   return Response.json({
     object: "list",
-    data: (usableIds.length > 0 ? usableIds : [fallbackModelId]).map((id) => ({ id, object: "model" })),
+    data: availableIds.map((id) => ({ id, object: "model" })),
     upstreamAvailable: modelsProbe.reachable,
+    liveModelSwitchSupported,
     engineReady:
       engineProbe.state === "healthy"
         ? true

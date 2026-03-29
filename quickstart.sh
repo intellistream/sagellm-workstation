@@ -8,6 +8,7 @@ BLUE='\033[0;34m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
+WORKSTATION_BOOTSTRAP_POLICY_CONFIRMED="false"
 
 WORKSTATION_BOOTSTRAP_MODEL_DEFAULT_CPU="Qwen/Qwen2.5-1.5B-Instruct"
 WORKSTATION_BOOTSTRAP_MODEL_DEFAULT_ACCEL="Qwen/Qwen2.5-7B-Instruct"
@@ -122,6 +123,79 @@ check() {
   fi
 }
 
+resolve_conda_command() {
+  if [[ -n "${CONDA_EXE:-}" && -x "${CONDA_EXE}" ]]; then
+    printf '%s\n' "$CONDA_EXE"
+    return 0
+  fi
+  if command -v conda &>/dev/null; then
+    command -v conda
+    return 0
+  fi
+  return 1
+}
+
+workstation_auto_install_node_enabled() {
+  [[ "${WORKSTATION_AUTO_INSTALL_NODE_WITH_CONDA:-true}" == "true" ]]
+}
+
+active_conda_env_name() {
+  if [[ -n "${CONDA_DEFAULT_ENV:-}" ]]; then
+    printf '%s\n' "$CONDA_DEFAULT_ENV"
+    return 0
+  fi
+
+  if [[ -n "${CONDA_PREFIX:-}" ]]; then
+    basename "$CONDA_PREFIX"
+    return 0
+  fi
+
+  return 1
+}
+
+ensure_node_runtime() {
+  local conda_cmd
+  local conda_env
+  local node_version_spec
+
+  if command -v node &>/dev/null && command -v npm &>/dev/null; then
+    return 0
+  fi
+
+  if ! workstation_auto_install_node_enabled; then
+    return 1
+  fi
+
+  conda_cmd="$(resolve_conda_command || true)"
+  conda_env="$(active_conda_env_name || true)"
+  node_version_spec="${WORKSTATION_NODEJS_CONDA_SPEC:-nodejs>=20,<21}"
+
+  if [[ -z "$conda_cmd" || -z "$conda_env" ]]; then
+    return 1
+  fi
+
+  echo -e "${BLUE}🧰 未检测到 node/npm，正在尝试通过当前 conda 环境自动安装 Node.js…${NC}"
+  echo -e "   conda env: ${GREEN}${conda_env}${NC}"
+  echo -e "   package:   ${GREEN}${node_version_spec}${NC}"
+
+  "$conda_cmd" install -y -n "$conda_env" -c conda-forge "$node_version_spec"
+
+  if [[ -n "${CONDA_PREFIX:-}" && -d "${CONDA_PREFIX}/bin" ]]; then
+    case ":$PATH:" in
+      *":${CONDA_PREFIX}/bin:"*) ;;
+      *) export PATH="${CONDA_PREFIX}/bin:$PATH" ;;
+    esac
+  fi
+
+  if command -v node &>/dev/null && command -v npm &>/dev/null; then
+    echo -e "${GREEN}✅ 已通过 conda 自动补齐 node/npm${NC}"
+    return 0
+  fi
+
+  echo -e "${YELLOW}✗ 已尝试通过 conda 安装 Node.js，但当前 shell 仍未检测到 node/npm${NC}"
+  return 1
+}
+
 resolve_compose_command() {
   if docker compose version &>/dev/null; then
     printf 'docker compose\n'
@@ -141,6 +215,17 @@ ensure_env_file() {
   fi
 }
 
+default_hf_endpoint() {
+  printf '%s\n' "${WORKSTATION_DEFAULT_HF_ENDPOINT:-https://hf-mirror.com}"
+}
+
+workstation_should_enforce_bootstrap_model() {
+  if [[ "${WORKSTATION_ENFORCE_BOOTSTRAP_MODEL_ON_START:-false}" == "true" ]]; then
+    return 0
+  fi
+  [[ "$WORKSTATION_BOOTSTRAP_POLICY_CONFIRMED" == "true" ]]
+}
+
 load_env_file() {
   ensure_env_file
   set -a
@@ -148,10 +233,9 @@ load_env_file() {
   source .env 2>/dev/null || true
   set +a
 
-  # Keep optional vars truly optional: empty string should not override
-  # downstream defaults (e.g. Hugging Face endpoint).
   if [[ -z "${HF_ENDPOINT:-}" ]]; then
-    unset HF_ENDPOINT
+    HF_ENDPOINT="$(default_hf_endpoint)"
+    export HF_ENDPOINT
   fi
   if [[ -z "${HF_TOKEN:-}" ]]; then
     unset HF_TOKEN
@@ -180,6 +264,75 @@ update_env_value() {
     }
   ' "$file_path" > "$tmp_file"
   mv "$tmp_file" "$file_path"
+}
+
+append_shell_words() {
+  local output_var="$1"
+  shift
+  local current="${!output_var:-}"
+  local word
+
+  for word in "$@"; do
+    if [[ -z "$current" ]]; then
+      printf -v current '%q' "$word"
+    else
+      printf -v current '%s %q' "$current" "$word"
+    fi
+  done
+
+  printf -v "$output_var" '%s' "$current"
+}
+
+workstation_ascend_compile_custom_kernels() {
+  if [[ -n "${WORKSTATION_ASCEND_COMPILE_CUSTOM_KERNELS:-}" ]]; then
+    printf '%s\n' "$WORKSTATION_ASCEND_COMPILE_CUSTOM_KERNELS"
+    return 0
+  fi
+
+  if [[ -n "${COMPILE_CUSTOM_KERNELS:-}" ]]; then
+    printf '%s\n' "$COMPILE_CUSTOM_KERNELS"
+    return 0
+  fi
+
+  printf '0\n'
+}
+
+launch_local_workstation_backend() {
+  local log_file="$1"
+  local treat_as_ascend_runtime="$2"
+  local compile_custom_kernels="$3"
+  shift 3
+
+  local env_assignments=()
+  local command_words=()
+  local launch_string=""
+  local manager_env_cmd=""
+
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--" ]]; then
+      shift
+      break
+    fi
+    env_assignments+=("$1")
+    shift
+  done
+  command_words=("$@")
+
+  if (( ${#command_words[@]} == 0 )); then
+    echo -e "${YELLOW}✗ 工作站后端自启动命令为空${NC}"
+    return 1
+  fi
+
+  append_shell_words launch_string env "${env_assignments[@]}" "${command_words[@]}"
+
+  if [[ "$treat_as_ascend_runtime" == "true" && -n "$compile_custom_kernels" && -n "$(command -v hust-ascend-manager 2>/dev/null || true)" ]]; then
+    append_shell_words manager_env_cmd "$(command -v hust-ascend-manager)" env --shell
+    echo -e "${BLUE}🧭 Ascend 自启动将自动注入 hust-ascend-manager 环境，默认使用 COMPILE_CUSTOM_KERNELS=${compile_custom_kernels}${NC}"
+    nohup bash -lc "set -euo pipefail; eval \"\$($manager_env_cmd)\"; if [[ -n \"\${HUST_ATB_SET_ENV:-}\" && -f \"\${HUST_ATB_SET_ENV}\" ]]; then set +u; source \"\${HUST_ATB_SET_ENV}\" --cxx_abi=1; set -u; fi; exec $launch_string" >"$log_file" 2>&1 &
+    return 0
+  fi
+
+  nohup env "${env_assignments[@]}" "${command_words[@]}" >"$log_file" 2>&1 &
 }
 
 gateway_host() {
@@ -228,6 +381,83 @@ gateway_is_local_target() {
       return 1
       ;;
   esac
+}
+
+interactive_launcher_enabled() {
+  local enabled="${WORKSTATION_INTERACTIVE_LAUNCHER:-true}"
+  [[ "$enabled" == "true" ]] && [[ -t 0 ]] && [[ -t 1 ]]
+}
+
+frontend_port() {
+  printf '%s\n' "${APP_PORT:-3000}"
+}
+
+frontend_probe_url() {
+  printf 'http://127.0.0.1:%s\n' "$(frontend_port)"
+}
+
+frontend_http_code() {
+  curl -sS -o /dev/null -w '%{http_code}' --max-time 2 "$(frontend_probe_url)" 2>/dev/null || true
+}
+
+frontend_is_healthy() {
+  local code
+  code="$(frontend_http_code)"
+  [[ "$code" =~ ^[23][0-9][0-9]$ ]]
+}
+
+frontend_is_running() {
+  local code
+  code="$(frontend_http_code)"
+  [[ -n "$code" && "$code" != "000" ]]
+}
+
+frontend_cached_project_root() {
+  local next_dir="$SCRIPT_DIR/.next"
+  local cached_path=""
+
+  if [[ ! -d "$next_dir/server" ]]; then
+    return 1
+  fi
+
+  cached_path="$(grep -RaoEm1 '/[^"[:space:]]+/src/app' "$next_dir/server" 2>/dev/null | head -n1 || true)"
+  if [[ -z "$cached_path" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "${cached_path%/src/app}"
+}
+
+frontend_clear_build_cache() {
+  local next_dir="$SCRIPT_DIR/.next"
+
+  if [[ -d "$next_dir" ]]; then
+    rm -rf "$next_dir"
+  fi
+}
+
+maybe_reset_stale_frontend_build_cache() {
+  local cached_root=""
+  local http_code="${1:-}"
+
+  cached_root="$(frontend_cached_project_root || true)"
+  if [[ -n "$cached_root" && "$cached_root" != "$SCRIPT_DIR" ]]; then
+    echo -e "${YELLOW}ℹ 检测到 .next 缓存来自其他目录：${cached_root}；正在清理旧前端构建缓存${NC}"
+    frontend_clear_build_cache
+    return 0
+  fi
+
+  if [[ -n "$http_code" && "$http_code" =~ ^5[0-9][0-9]$ ]] && [[ -d "$SCRIPT_DIR/.next" ]]; then
+    echo -e "${YELLOW}ℹ 当前前端返回 HTTP ${http_code}，正在清理 .next 缓存后重启${NC}"
+    frontend_clear_build_cache
+    return 0
+  fi
+
+  return 1
+}
+
+frontend_log_file() {
+  printf '%s\n' "$SCRIPT_DIR/.logs/workstation-dev.log"
 }
 
 gateway_http_code() {
@@ -361,7 +591,7 @@ find_ascend_toolkit_home() {
 prepare_backend_runtime_env() {
   local backend="$1"
   local parent_dir
-  local ascend_env_script
+  local ascend_env_script=""
   local toolkit_home
 
   if [[ "$backend" != "ascend" ]]; then
@@ -369,9 +599,13 @@ prepare_backend_runtime_env() {
   fi
 
   parent_dir="$(cd "$SCRIPT_DIR/.." && pwd)"
-  ascend_env_script="$parent_dir/vllm-hust/scripts/use_single_ascend_env.sh"
+  if [[ -f "$parent_dir/vllm-ascend-hust/scripts/use_single_ascend_env.sh" ]]; then
+    ascend_env_script="$parent_dir/vllm-ascend-hust/scripts/use_single_ascend_env.sh"
+  elif [[ -f "$parent_dir/vllm-hust/scripts/use_single_ascend_env.sh" ]]; then
+    ascend_env_script="$parent_dir/vllm-hust/scripts/use_single_ascend_env.sh"
+  fi
 
-  if [[ ! -f "$ascend_env_script" ]]; then
+  if [[ -z "$ascend_env_script" ]]; then
     echo -e "${YELLOW}⚠ 未找到 Ascend 环境脚本：$ascend_env_script${NC}"
     return 0
   fi
@@ -487,6 +721,74 @@ model_available_in_hf_cache() {
   return 1
 }
 
+cached_hf_model_ids() {
+  local cache_root="${HF_HUB_CACHE:-${HF_HOME:-$HOME/.cache/huggingface}/hub}"
+  local entry
+  local snapshots
+  local model_id
+
+  if [[ ! -d "$cache_root" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r entry; do
+    snapshots="$entry/snapshots"
+    if [[ ! -d "$snapshots" ]]; then
+      continue
+    fi
+    if ! find "$snapshots" -mindepth 1 -maxdepth 1 -type d | grep -q .; then
+      continue
+    fi
+
+    model_id="${entry##*/models--}"
+    model_id="${model_id//--/\/}"
+    printf '%s\n' "$model_id"
+  done < <(find "$cache_root" -mindepth 1 -maxdepth 1 -type d -name 'models--*' | sort)
+}
+
+resolve_local_cached_fallback_model() {
+  local requested_model="$1"
+  local candidate
+  local -a preferred_candidates
+
+  preferred_candidates=(
+    "$requested_model"
+    "${WORKSTATION_BOOTSTRAP_MODEL:-}"
+    "${DEFAULT_MODEL:-}"
+    "Qwen/Qwen3-0.6B"
+    "$WORKSTATION_BOOTSTRAP_MODEL_DEFAULT_ACCEL"
+    "$WORKSTATION_BOOTSTRAP_MODEL_DEFAULT_CPU"
+    "${DEFAULT_STARTUP_MODEL_MENU_VALUES[@]}"
+    "${CPU_STARTUP_MODEL_MENU_VALUES[@]}"
+    "${CUDA_12GB_STARTUP_MODEL_MENU_VALUES[@]}"
+    "${CUDA_8GB_STARTUP_MODEL_MENU_VALUES[@]}"
+    "${CUDA_16GB_STARTUP_MODEL_MENU_VALUES[@]}"
+    "${CUDA_24GB_STARTUP_MODEL_MENU_VALUES[@]}"
+  )
+
+  for candidate in "${preferred_candidates[@]}"; do
+    if [[ -z "$candidate" ]]; then
+      continue
+    fi
+    if model_available_in_hf_cache "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  while IFS= read -r candidate; do
+    if [[ -z "$candidate" ]]; then
+      continue
+    fi
+    if model_available_in_hf_cache "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(cached_hf_model_ids)
+
+  return 1
+}
+
 huggingface_endpoint_reachable() {
   curl -fsS -I --max-time 3 https://huggingface.co >/dev/null 2>&1
 }
@@ -525,21 +827,78 @@ find_listening_pids_for_port() {
   return 0
 }
 
+port_has_listener() {
+  local port="$1"
+  if command -v ss &>/dev/null; then
+    ss -ltnH 2>/dev/null | grep -E "(:|\])${port}[[:space:]]" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v lsof &>/dev/null; then
+    lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+    return $?
+  fi
+  return 1
+}
+
+ensure_local_port_available() {
+  local port="$1"
+  local service_name="$2"
+  local env_hint="$3"
+  local pids=""
+  local listeners=""
+
+  if ! port_has_listener "$port"; then
+    return 0
+  fi
+
+  echo -e "${YELLOW}✗ ${service_name} 所需端口 ${port} 仍被其他进程占用，无法继续本地自启动${NC}"
+
+  if command -v ss &>/dev/null; then
+    listeners="$(ss -ltnH 2>/dev/null | grep -E "(:|\\])${port}[[:space:]]" || true)"
+    if [[ -n "$listeners" ]]; then
+      echo -e "${YELLOW}  当前监听：${NC}"
+      printf '%s\n' "$listeners" | sed 's/^/   /'
+    fi
+  fi
+
+  pids="$(find_listening_pids_for_port "$port")"
+  if [[ -n "$pids" ]]; then
+    echo -e "${YELLOW}  可见 PID: $(printf '%s\n' "$pids" | tr '\n' ' ' | sed 's/[[:space:]]*$//')${NC}"
+  else
+    echo -e "${YELLOW}  当前用户无法看到该监听的 PID；通常说明它属于其他用户、容器或受限服务${NC}"
+  fi
+
+  echo -e "${YELLOW}  处理方式：先释放端口 ${port}，或修改 ${env_hint} 后重新执行 ./quickstart.sh${NC}"
+  return 1
+}
+
 stop_local_processes_on_port() {
   local port
   local pids
   port="$1"
+  if ! port_has_listener "$port"; then
+    return 0
+  fi
+
   pids="$(find_listening_pids_for_port "$port")"
   if [[ -z "$pids" ]]; then
+    echo -e "${YELLOW}⚠️ 端口 ${port} 已被监听，但当前用户无法识别对应 PID；不会强制停止未知进程${NC}"
     return 0
   fi
 
   echo -e "${YELLOW}♻️ 端口 ${port} 上已有本地进程，正在停止以便重建可用栈…${NC}"
   printf '%s\n' "$pids" | xargs -r kill
   sleep 2
-  pids="$(find_listening_pids_for_port "$port")"
-  if [[ -n "$pids" ]]; then
-    printf '%s\n' "$pids" | xargs -r kill -9
+  if port_has_listener "$port"; then
+    pids="$(find_listening_pids_for_port "$port")"
+    if [[ -n "$pids" ]]; then
+      printf '%s\n' "$pids" | xargs -r kill -9
+      sleep 1
+    fi
+  fi
+
+  if port_has_listener "$port"; then
+    echo -e "${YELLOW}⚠️ 端口 ${port} 仍被占用，后续启动会直接失败${NC}"
   fi
 }
 
@@ -745,6 +1104,7 @@ select_bootstrap_model_interactively() {
 
   export WORKSTATION_BOOTSTRAP_MODEL="$selected_model"
   export DEFAULT_MODEL="$selected_model"
+  WORKSTATION_BOOTSTRAP_POLICY_CONFIRMED="true"
   update_env_value ".env" "WORKSTATION_BOOTSTRAP_MODEL" "$selected_model"
   update_env_value ".env" "DEFAULT_MODEL" "$selected_model"
 
@@ -752,6 +1112,7 @@ select_bootstrap_model_interactively() {
 }
 
 start_full_stack_if_needed() {
+  local force_restart="${1:-false}"
   local auto_start
   local auto_heal
   local tool_call_parser
@@ -771,6 +1132,9 @@ start_full_stack_if_needed() {
   local target_device
   local treat_as_ascend_runtime
   local gpu_memory_utilization
+  local compile_custom_kernels=""
+  local cached_fallback_model=""
+  local enforce_bootstrap_model="false"
   local -a offline_env
   local -a backend_env
   auto_start="${WORKSTATION_AUTO_START_GATEWAY:-true}"
@@ -802,9 +1166,25 @@ start_full_stack_if_needed() {
     backend_env+=(VLLM_TARGET_DEVICE="$target_device")
   fi
 
+  if [[ "$treat_as_ascend_runtime" == "true" ]]; then
+    compile_custom_kernels="$(workstation_ascend_compile_custom_kernels)"
+    backend_env+=(COMPILE_CUSTOM_KERNELS="$compile_custom_kernels")
+  fi
+
+  if workstation_should_enforce_bootstrap_model; then
+    enforce_bootstrap_model="true"
+  fi
+
   if gateway_inference_ready; then
     running_model="$(gateway_current_model)"
-    if gateway_is_local_target && [[ -n "$running_model" && "$running_model" != "$model" ]]; then
+    if [[ "$force_restart" == "true" ]] && gateway_is_local_target; then
+      echo -e "${YELLOW}♻️ 按要求重启本地 vllm-hust 服务…${NC}"
+    elif gateway_is_local_target && [[ -n "$running_model" && "$running_model" != "$model" ]]; then
+      if [[ "$enforce_bootstrap_model" != "true" ]]; then
+        echo -e "${YELLOW}ℹ 检测到本地服务已在运行模型 ${running_model}；当前配置模型为 ${model}，本次未显式要求切换模型，将直接复用当前服务${NC}"
+        echo -e "${YELLOW}  若要按配置模型重建，请执行 ./quickstart.sh restart-backend，或开启 WORKSTATION_INTERACTIVE_MODEL_MENU 后重新选择${NC}"
+        return 0
+      fi
       if [[ "$auto_heal" != "true" ]]; then
         echo -e "${YELLOW}✗ 当前本地服务正在运行模型 ${running_model}，但你选择了 ${model}；且 WORKSTATION_AUTO_HEAL_GATEWAY=false${NC}"
         exit 1
@@ -840,6 +1220,20 @@ start_full_stack_if_needed() {
         hf_offline_enabled="true"
         offline_env+=(HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1)
         echo -e "${YELLOW}ℹ 检测到 huggingface.co 不可达，且本地有缓存模型，自动启用离线模式${NC}"
+      elif [[ "${WORKSTATION_AUTO_FALLBACK_TO_LOCAL_CACHE:-true}" == "true" ]]; then
+        cached_fallback_model="$(resolve_local_cached_fallback_model "$model" || true)"
+        if [[ -n "$cached_fallback_model" ]]; then
+          echo -e "${YELLOW}ℹ 检测到 huggingface.co 不可达，且当前模型 ${model} 未缓存；自动回退到本地缓存模型 ${cached_fallback_model}${NC}"
+          model="$cached_fallback_model"
+          export WORKSTATION_BOOTSTRAP_MODEL="$model"
+          export DEFAULT_MODEL="$model"
+          hf_offline_enabled="true"
+          offline_env+=(HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1)
+        else
+          echo -e "${YELLOW}✗ 检测到 huggingface.co 不可达，且本地未找到模型缓存：${model}${NC}"
+          echo -e "${YELLOW}  请配置可达的 HF_ENDPOINT、准备本地模型路径，或先预下载模型后再启动${NC}"
+          exit 1
+        fi
       else
         echo -e "${YELLOW}✗ 检测到 huggingface.co 不可达，且本地未找到模型缓存：${model}${NC}"
         echo -e "${YELLOW}  请配置可达的 HF_ENDPOINT、准备本地模型路径，或先预下载模型后再启动${NC}"
@@ -874,6 +1268,8 @@ start_full_stack_if_needed() {
   stop_local_vllm_hust_serve_processes "$port" "$engine_port"
   stop_local_processes_on_port "$port"
   stop_local_processes_on_port "$engine_port"
+  ensure_local_port_available "$port" "工作站本地 gateway" "VLLM_HUST_BASE_URL=http://localhost:<new-port>"
+  ensure_local_port_available "$engine_port" "工作站本地 engine" "WORKSTATION_ENGINE_PORT=<new-port>"
 
   if command -v vllm-hust &>/dev/null; then
     local serve_help
@@ -941,33 +1337,45 @@ start_full_stack_if_needed() {
       serve_args+=(--tool-call-parser "$tool_call_parser")
     fi
 
-    nohup env \
+    launch_local_workstation_backend \
+      "$log_file" \
+      "$treat_as_ascend_runtime" \
+      "$compile_custom_kernels" \
       "${offline_env[@]}" \
       "${backend_env[@]}" \
       VLLM_HUST_PREFLIGHT_CANARY=0 \
       VLLM_HUST_STARTUP_CANARY=0 \
       VLLM_HUST_PERIODIC_CANARY=0 \
-      vllm-hust "${serve_args[@]}" >"$log_file" 2>&1 &
+      -- \
+      vllm-hust "${serve_args[@]}"
   else
     pythonpath="$(build_workspace_pythonpath)"
     if command -v python3 &>/dev/null && [[ -n "$pythonpath" ]]; then
-      nohup env \
+      launch_local_workstation_backend \
+        "$log_file" \
+        "$treat_as_ascend_runtime" \
+        "$compile_custom_kernels" \
         "${offline_env[@]}" \
         "${backend_env[@]}" \
         PYTHONPATH="$pythonpath" \
         VLLM_HUST_PREFLIGHT_CANARY=0 \
         VLLM_HUST_STARTUP_CANARY=0 \
         VLLM_HUST_PERIODIC_CANARY=0 \
-        python3 -m vllm_hust.cli serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port" >"$log_file" 2>&1 &
+        -- \
+        python3 -m vllm_hust.cli serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port"
     elif command -v python &>/dev/null && [[ -n "$pythonpath" ]]; then
-      nohup env \
+      launch_local_workstation_backend \
+        "$log_file" \
+        "$treat_as_ascend_runtime" \
+        "$compile_custom_kernels" \
         "${offline_env[@]}" \
         "${backend_env[@]}" \
         PYTHONPATH="$pythonpath" \
         VLLM_HUST_PREFLIGHT_CANARY=0 \
         VLLM_HUST_STARTUP_CANARY=0 \
         VLLM_HUST_PERIODIC_CANARY=0 \
-        python -m vllm_hust.cli serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port" >"$log_file" 2>&1 &
+        -- \
+        python -m vllm_hust.cli serve --backend "$backend" --model "$model" --host 0.0.0.0 --port "$port" --engine-port "$engine_port"
     else
       echo -e "${YELLOW}✗ 无法自动启动完整栈：未找到 vllm-hust CLI，也没有可用 Python + workspace 源码入口${NC}"
       exit 1
@@ -990,27 +1398,272 @@ start_full_stack_if_needed() {
   exit 1
 }
 
+ensure_frontend_dependencies() {
+  if [[ -x node_modules/.bin/next ]]; then
+    return 0
+  fi
+
+  echo -e "${BLUE}📦 安装工作站前端依赖…${NC}"
+  npm install
+}
+
+ensure_frontend_dev_server() {
+  local app_port
+  local http_code
+  local log_file
+
+  app_port="$(frontend_port)"
+  log_file="$(frontend_log_file)"
+
+  ensure_node_runtime || true
+  check node
+  check npm
+  check curl
+
+  if frontend_is_running; then
+    echo -e "${GREEN}✅ 工作站前端已可访问：$(frontend_probe_url)${NC}"
+    return 0
+  fi
+
+  mkdir -p "$SCRIPT_DIR/.logs"
+  stop_local_processes_on_port "$app_port"
+  ensure_local_port_available "$app_port" "工作站前端" "APP_PORT=<new-port>"
+  ensure_frontend_dependencies
+
+  echo -e "${BLUE}🖥️ 正在后台启动工作站前端…${NC}"
+  nohup env NEXT_TELEMETRY_DISABLED=1 npm run dev >"$log_file" 2>&1 &
+
+  for _ in {1..60}; do
+    sleep 2
+    http_code="$(frontend_http_code)"
+    if frontend_is_healthy; then
+      echo -e "${GREEN}✅ 工作站前端已就绪：$(frontend_probe_url)${NC}"
+      echo -e "   日志文件: ${GREEN}$log_file${NC}"
+      return 0
+    fi
+  done
+    if frontend_is_running; then
+      echo -e "${YELLOW}♻️ 检测到现有工作站前端实例异常（HTTP ${http_code:-unknown}），将自动重启${NC}"
+    fi
+    maybe_reset_stale_frontend_build_cache "$http_code" || true
+
+  echo -e "${YELLOW}✗ 工作站前端启动失败或 120s 内未就绪，请检查日志：$log_file${NC}"
+  exit 1
+}
+
+stop_local_demo_stack() {
+  local port
+  local engine_port
+  local app_port
+
+  port="$(gateway_port)"
+  engine_port="${WORKSTATION_ENGINE_PORT:-$((port + 1))}"
+  app_port="$(frontend_port)"
+
+  stop_local_processes_on_port "$app_port"
+  stop_local_vllm_hust_serve_processes "$port" "$engine_port"
+  stop_local_processes_on_port "$port"
+  stop_local_processes_on_port "$engine_port"
+
+  echo -e "${GREEN}✅ 本地演示栈已停止${NC}"
+}
+
+print_local_stack_status() {
+  local running_model=""
+  local code=""
+  local frontend_code=""
+
+  echo ""
+  echo -e "${BLUE}📋 当前演示栈状态${NC}"
+  echo -e "   Gateway 目标: ${GREEN}${VLLM_HUST_BASE_URL:-http://localhost:8080}${NC}"
+  echo -e "   前端地址:    ${GREEN}$(frontend_probe_url)${NC}"
+
+  if gateway_inference_ready; then
+    running_model="$(gateway_current_model)"
+    echo -e "   后端状态:    ${GREEN}可推理${NC}${running_model:+ / 模型 ${running_model}}"
+  elif gateway_is_running; then
+    code="$(gateway_http_code)"
+    echo -e "   后端状态:    ${YELLOW}gateway 已响应，但 engine 未就绪${NC} (HTTP ${code:-unknown})"
+  else
+    echo -e "   后端状态:    ${YELLOW}未检测到本地可用推理服务${NC}"
+  fi
+
+  frontend_code="$(frontend_http_code)"
+  if frontend_is_healthy; then
+    echo -e "   前端状态:    ${GREEN}运行中${NC}"
+  elif frontend_is_running; then
+    echo -e "   前端状态:    ${YELLOW}进程存在但页面异常${NC} (HTTP ${frontend_code:-unknown})"
+  else
+    echo -e "   前端状态:    ${YELLOW}未启动${NC}"
+  fi
+
+  if gateway_is_local_target; then
+    echo -e "   后端日志:    ${GREEN}$SCRIPT_DIR/.logs/vllm-hust-serve.log${NC}"
+  else
+    echo -e "   后端日志:    ${YELLOW}当前是远端目标，脚本不控制远端服务${NC}"
+  fi
+  echo -e "   前端日志:    ${GREEN}$(frontend_log_file)${NC}"
+}
+
+run_demo_mode() {
+  load_env_file
+  select_bootstrap_model_interactively
+  start_full_stack_if_needed
+  ensure_frontend_dev_server
+
+  echo ""
+  echo -e "${GREEN}✅ 演示模式已就绪${NC}"
+  echo -e "   工作站界面: ${GREEN}$(frontend_probe_url)${NC}"
+  echo -e "   OpenAI 接口: ${GREEN}$(gateway_probe_url)${NC}"
+}
+
+run_backend_mode() {
+  local force_restart="${1:-false}"
+  load_env_file
+  select_bootstrap_model_interactively
+  start_full_stack_if_needed "$force_restart"
+}
+
+run_ui_mode() {
+  load_env_file
+  ensure_frontend_dev_server
+}
+
+run_status_mode() {
+  load_env_file
+  print_local_stack_status
+}
+
+run_stop_mode() {
+  load_env_file
+  stop_local_demo_stack
+}
+
+run_interactive_launcher() {
+  local choice
+
+  load_env_file
+
+  while true; do
+    print_local_stack_status
+    echo ""
+    echo -e "${BLUE}🎬 演示启动菜单${NC}"
+    echo "  1) 一键启动全部（后端 + 工作站 UI）"
+    echo "  2) 仅启动 / 修复本地 vllm-hust 后端"
+    echo "  3) 仅启动工作站前端"
+    echo "  4) 查看当前状态"
+    echo "  5) 重启本地后端"
+    echo "  6) 停止本地演示栈"
+    echo "  0) 退出"
+    echo ""
+
+    read -r -p "请选择 [1]: " choice
+    choice="${choice:-1}"
+
+    case "$choice" in
+      1)
+        select_bootstrap_model_interactively
+        start_full_stack_if_needed
+        ensure_frontend_dev_server
+        return 0
+        ;;
+      2)
+        select_bootstrap_model_interactively
+        start_full_stack_if_needed
+        return 0
+        ;;
+      3)
+        ensure_frontend_dev_server
+        return 0
+        ;;
+      4)
+        ;;
+      5)
+        select_bootstrap_model_interactively
+        start_full_stack_if_needed true
+        return 0
+        ;;
+      6)
+        stop_local_demo_stack
+        ;;
+      0)
+        return 0
+        ;;
+      *)
+        echo -e "${YELLOW}✗ 无效选项，请输入 0-6${NC}"
+        ;;
+    esac
+  done
+}
+
 MODE="${1:-auto}"
 COMPOSE_COMMAND=""
+
+if [[ $# -eq 0 ]] && interactive_launcher_enabled; then
+  MODE="menu"
+fi
+
+if [[ "$MODE" == "menu" ]]; then
+  run_interactive_launcher
+  exit 0
+fi
+
+if [[ "$MODE" == "demo" ]]; then
+  run_demo_mode
+  exit 0
+fi
+
+if [[ "$MODE" == "backend" ]]; then
+  run_backend_mode
+  exit 0
+fi
+
+if [[ "$MODE" == "restart-backend" ]]; then
+  run_backend_mode true
+  exit 0
+fi
+
+if [[ "$MODE" == "ui" ]]; then
+  run_ui_mode
+  exit 0
+fi
+
+if [[ "$MODE" == "status" ]]; then
+  run_status_mode
+  exit 0
+fi
+
+if [[ "$MODE" == "stop" ]]; then
+  run_stop_mode
+  exit 0
+fi
 
 if [[ "$MODE" == "auto" ]]; then
   if command -v docker &>/dev/null; then
     COMPOSE_COMMAND="$(resolve_compose_command)"
     if [[ -n "$COMPOSE_COMMAND" ]]; then
       MODE="docker"
-    elif command -v node &>/dev/null && command -v npm &>/dev/null; then
-      MODE="dev"
-      echo -e "${YELLOW}ℹ 检测到 docker 但缺少 Docker Compose（docker compose/docker-compose），自动切换到 dev 模式${NC}"
     else
-      echo -e "${YELLOW}✗ 检测到 docker，但缺少 Docker Compose（docker compose/docker-compose），且无可用 node/npm 环境${NC}"
+      ensure_node_runtime || true
+      if command -v node &>/dev/null && command -v npm &>/dev/null; then
+        MODE="dev"
+        echo -e "${YELLOW}ℹ 检测到 docker 但缺少 Docker Compose（docker compose/docker-compose），自动切换到 dev 模式${NC}"
+      else
+        echo -e "${YELLOW}✗ 检测到 docker，但缺少 Docker Compose（docker compose/docker-compose），且无可用 node/npm 环境${NC}"
+        echo -e "${YELLOW}  若当前 shell 已激活 conda，可保持 WORKSTATION_AUTO_INSTALL_NODE_WITH_CONDA=true 让脚本自动安装 Node.js${NC}"
+        exit 1
+      fi
+    fi
+  else
+    ensure_node_runtime || true
+    if command -v node &>/dev/null && command -v npm &>/dev/null; then
+      MODE="dev"
+      echo -e "${YELLOW}ℹ 未检测到 docker，自动切换到 dev 模式${NC}"
+    else
+      echo -e "${YELLOW}✗ 未检测到可用的 docker 或 node/npm 环境${NC}"
+      echo -e "${YELLOW}  若当前 shell 已激活 conda，可保持 WORKSTATION_AUTO_INSTALL_NODE_WITH_CONDA=true 让脚本自动安装 Node.js${NC}"
       exit 1
     fi
-  elif command -v node &>/dev/null && command -v npm &>/dev/null; then
-    MODE="dev"
-    echo -e "${YELLOW}ℹ 未检测到 docker，自动切换到 dev 模式${NC}"
-  else
-    echo -e "${YELLOW}✗ 未检测到可用的 docker 或 node/npm 环境${NC}"
-    exit 1
   fi
 fi
 
@@ -1050,6 +1703,7 @@ if [[ "$MODE" == "docker" ]]; then
   echo -e "   停止服务:   ${compose_hint} down"
 
 elif [[ "$MODE" == "dev" ]]; then
+  ensure_node_runtime || true
   check node
   check npm
   check curl
@@ -1065,11 +1719,19 @@ elif [[ "$MODE" == "dev" ]]; then
   npm run dev
 
 else
-  echo "用法: $0 [auto|docker|dev]"
+  echo "用法: $0 [menu|demo|backend|restart-backend|ui|status|stop|auto|docker|dev]"
+  echo "  menu            — 交互式演示启动菜单（本地终端默认）"
+  echo "  demo            — 后台一键拉起后端 + 工作站 UI"
+  echo "  backend         — 仅启动 / 修复本地 vllm-hust 后端"
+  echo "  restart-backend — 强制重启本地 vllm-hust 后端"
+  echo "  ui              — 仅后台启动工作站前端"
+  echo "  status          — 查看当前本地演示栈状态"
+  echo "  stop            — 停止本地演示栈"
   echo "  auto    — 自动选择 docker 或 dev（默认）"
   echo "  docker  — Docker Compose 部署（推荐生产/演示）"
   echo "  dev     — 本地 npm 开发模式"
   echo ""
+  echo "可通过 WORKSTATION_INTERACTIVE_LAUNCHER=false 关闭默认演示菜单"
   echo "可通过 WORKSTATION_INTERACTIVE_MODEL_MENU=false 关闭启动时模型菜单"
   echo "可通过 WORKSTATION_TOOL_CALL_PARSER=pythonic 切换工具解析器"
   exit 1

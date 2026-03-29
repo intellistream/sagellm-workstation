@@ -98,6 +98,7 @@ export default function WorkstationClient({ config }: { config: AppConfig }) {
   const [models, setModels] = useState<string[]>([defaultModel]);
   const [model, setModel] = useState(defaultModel);
   const [online, setOnline] = useState(false);
+  const [liveModelSwitchSupported, setLiveModelSwitchSupported] = useState(false);
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [metricsHistory, setMetricsHistory] = useState<HistoryPoint[]>([]);
   const [webSearch, setWebSearch] = useState(false);
@@ -128,22 +129,22 @@ export default function WorkstationClient({ config }: { config: AppConfig }) {
       .then((r) => r.json())
       .then((data) => {
         const ids: string[] = (data?.data ?? []).map((m: { id: string }) => m.id);
-        const merged = Array.from(new Set([...ids, defaultModel].filter(Boolean)));
-        if (merged.length > 0) {
-          setModels(merged);
+        if (ids.length > 0) {
+          setModels(ids);
           setModel((prev) => {
             if (prev && ids.includes(prev)) {
               return prev;
             }
-            if (ids.length > 0) {
-              return ids[0];
-            }
-            return merged.includes(prev) ? prev : merged[0];
+            return ids[0];
           });
         }
         setOnline(Boolean(data?.upstreamAvailable));
+        setLiveModelSwitchSupported(Boolean(data?.liveModelSwitchSupported));
       })
-      .catch(() => setOnline(false));
+      .catch(() => {
+        setOnline(false);
+        setLiveModelSwitchSupported(false);
+      });
   }, [defaultModel]);
 
   // Poll metrics
@@ -423,6 +424,7 @@ export default function WorkstationClient({ config }: { config: AppConfig }) {
         accentColor={accentColor}
         model={model}
         models={models}
+        liveModelSwitchSupported={liveModelSwitchSupported}
         onModelChange={setModel}
         onOpenModelHub={() => setModelHubOpen(true)}
         onOpenAgentLab={() => setAgentLabOpen(true)}
@@ -454,6 +456,7 @@ export default function WorkstationClient({ config }: { config: AppConfig }) {
           accentColor={accentColor}
           model={model}
           models={models}
+          liveModelSwitchSupported={liveModelSwitchSupported}
           online={online}
           onModelChange={setModel}
         />

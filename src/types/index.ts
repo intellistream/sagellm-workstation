@@ -61,3 +61,15 @@ export interface AppConfig {
   defaultModel: string;
   searchEnabled: boolean;
 }
+
+export interface LocalServiceStatus {
+  baseUrl: string;
+  isLocalTarget: boolean;
+  gatewayReachable: boolean;
+  inferenceReady: boolean;
+  currentModel: string | null;
+  desiredModel: string;
+  recommendedAction: "none" | "start" | "restart" | "external";
+  backendLogFile: string;
+  frontendLogFile: string;
+}
