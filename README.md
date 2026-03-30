@@ -258,6 +258,7 @@ npm run start
 - deploy 脚本: `scripts/deploy_workstation.sh`
 - systemd 启动脚本: `scripts/run_workstation_systemd.sh`
 - unit 模板: `deploy/systemd/vllm-hust-workstation.service.template`
+- 统一运维入口: `scripts/manage_public_stack.sh`
 
 建议流程：
 
@@ -285,6 +286,48 @@ cp .env.example .env
 - deploy 脚本不会跑 `npm run dev`，而是执行 `next build`，然后把 `.next/standalone`、`.next/static`、`public/` 组装到固定 runtime 目录。
 - systemd 常驻服务只负责运行这个 runtime，避免把交互式 quickstart、本地 demo 控制逻辑带进生产服务。
 - 一旦服务由 `systemd --user` 拉起，后续生命周期就归 systemd 管，不会因为你关闭 shell、退出 VS Code，或结束某个外部调用而自动停止。
+
+### 以后直接用这组命令
+
+当前状态：
+
+- `workstation` 已经是 `systemd --user` 常驻
+- `vllm-hust` backend 仍通过 `quickstart.sh` 的本地完整栈逻辑启动和重启
+
+以后日常只需要记这几个命令：
+
+```bash
+# 查看本地与公网状态
+./scripts/manage_public_stack.sh status
+
+# 重启本地 vllm-hust backend
+./scripts/manage_public_stack.sh restart-backend
+
+# 仅重启 workstation systemd 服务
+./scripts/manage_public_stack.sh restart-workstation
+
+# 若你改了前端代码或 .env，重新构建并部署 workstation
+./scripts/manage_public_stack.sh deploy-workstation
+
+# 一次性重启 backend + workstation
+./scripts/manage_public_stack.sh restart-all
+
+# 看日志
+./scripts/manage_public_stack.sh logs
+```
+
+推荐顺序：
+
+- 只换模型、修 backend：`restart-backend`
+- 只改页面或 workstation 配置：`deploy-workstation`
+- 两边都想重新拉起：`restart-all`
+
+这套命令会保持当前挂载关系：
+
+- 本地 backend: `http://127.0.0.1:8080`
+- 本地 workstation: `http://127.0.0.1:3001`
+- 公网 workstation: `https://ws.sage.org.ai`
+- 公网 backend: `https://api.sage.org.ai`
 
 ### 多模型 Fleet 自动部署
 
